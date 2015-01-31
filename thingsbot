@@ -1,0 +1,85 @@
+#!/usr/bin/env python
+
+import mediorc
+import thingsbus.client
+
+class ChronCore(object) :
+	def __init__(self, nick, chan, thingsbus_broker_url, thingsbus_zone) :
+		self.nick = nick
+		self.chan = chan
+		self.thingsbus_broker_url = thingsbus_broker_url
+		self.thingsbus_zone = thingsbus_zone
+		self.client = thingsbus.client.Client(zone=self.thingsbus_zone, broker_url=self.thingsbus_broker_url)
+		self.bot = None
+	
+	def handle(self, nick, text) :
+		words = [w for w in text.split(' ') if w]
+
+		tdata = None
+
+		if len(words) == 2 :
+			thing = self.client.directory.get_thing(words[1], create_on_missing=False)
+			if (words[0] == '!thing') :
+				if not thing :
+					return 'no such thing.'
+				d = thing.get_data()
+				if d is None :
+					return 'no data for that thing.'
+				else :
+					return '%0.1f sec ago: %s' % (d[0], str(d[1]))
+			if (words[0] == '!thingdoc') :
+				if not thing :
+					return 'no such thing.'
+				elif not thing.documentation_url :
+					return 'no docs for that thing.'
+				else :
+					return 'docs: %s' % thing.documentation_url
+
+
+	def stop_hook(self) :
+		pass
+
+class ChronBot(mediorc.IRC) :
+	def __init__(self, server, nick, chan, core) :
+		self.core = core
+		self.core.bot = self
+		mediorc.IRC.__init__(self, server, nick, chan)
+	
+	def on_join(self, c, e) :
+		self.initialize_pinger()
+
+	def on_pubmsg(self, c, e) :
+		nick = e.source.split("!")[0]
+		chan = e.target
+		txt = e.arguments[0]
+
+		rmsg = self.core.handle(nick, txt)
+		if rmsg :
+			if isinstance(rmsg, basestring) :
+				rmsg = [rmsg]
+			for msg in rmsg :
+				self.connection.privmsg(chan, msg)
+
+
+class ChronThread(mediorc.IRCThread) :
+	def __init__(self, server, nick, chan, core) :
+		self.bot_create = lambda: ChronBot(server, nick, chan, core)
+		self.stop_hook = core.stop_hook
+		mediorc.IRCThread.__init__(self)
+
+import sys, optparse
+
+if __name__ == '__main__' :
+	parser = optparse.OptionParser()
+	parser.add_option('--thingsbus-broker-url', '-u', dest='thingsbus_broker_url', help="Thingsbus Broker URL.")
+	parser.add_option('--thingsbus-zone', '-z', dest='thingsbus_zone', help='Thingsbus Zone.')
+	(opts, args) = parser.parse_args()
+	
+	server, nick, chan = args
+
+	core = ChronCore(nick, chan, opts.thingsbus_broker_url, opts.thingsbus_zone)
+	s = ChronThread(server, nick, chan, core)
+	try :
+		s.run()
+	except KeyboardInterrupt :
+		s.stop()
